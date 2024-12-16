@@ -1,7 +1,8 @@
 from flask import Flask, render_template, request, jsonify
 from datetime import datetime, timedelta
 import pandas as pd
-from stock_predictor import StockPredictor
+# from stock_predictor import StockPredictor
+from stock_pred_lg import StockPredictor
 import os
 
 app = Flask(__name__)
@@ -9,7 +10,7 @@ app = Flask(__name__)
 # Initialize StockPredictor and load models
 predictor = StockPredictor(data_path='/Users/amarenderreddy/Desktop/Fall-24/CMPE-257/StockPredictor')
 predictor.load_data()
-predictor.load_saved_model()  # Load NVDA and NVDQ models
+predictor.load_models()  # Load NVDA and NVDQ models
 
 # Constants for initial portfolio
 INITIAL_NVDA_SHARES = 10000
@@ -41,10 +42,17 @@ def determine_best_strategy(day_predictions, nvda_shares, nvdq_shares):
     Determine the best trading strategy (IDLE, BULLISH, BEARISH) for a single day.
     """
     print("Day Predictions:", day_predictions)  # Debugging line
-    nvda_open = day_predictions['nvda']['open_price']
-    nvda_close = day_predictions['nvda']['close_price']
-    nvdq_open = day_predictions['nvdq']['open_price']
-    nvdq_close = day_predictions['nvdq']['close_price']
+    def clean_price(price):
+        """Remove '$' and ',' and convert to float."""
+        return float(price.replace('$', '').replace(',', ''))
+
+    print("Day Predictions:", day_predictions)  # Debugging line
+
+    # Clean and convert prediction strings to floats
+    nvda_open = clean_price(day_predictions['nvda']['open_price'])
+    nvda_close = clean_price(day_predictions['nvda']['close_price'])
+    nvdq_open = clean_price(day_predictions['nvdq']['open_price'])
+    nvdq_close = clean_price(day_predictions['nvdq']['close_price'])
 
     # Debug prints
     print("NVDA Open:", nvda_open, "NVDA Close:", nvda_close)
@@ -72,6 +80,7 @@ def home():
     return render_template('index.html')
 
 
+
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
@@ -80,36 +89,58 @@ def predict():
         if not selected_date:
             return jsonify({'success': False, 'error': 'Date not provided'})
 
-        # Predict for the next 5 business days based on selected date
-        predictions = predictor.predict_next_period(target_date=selected_date)
+        # Convert selected date to datetime
+        target_date = pd.to_datetime(selected_date)
 
-        # Initialize portfolio
+        # Filter data up to the selected date
+        nvda_data = predictor.nvda_data[predictor.nvda_data['Date'] <= target_date]
+        nvdq_data = predictor.nvdq_data[predictor.nvdq_data['Date'] <= target_date]
+
+        # Predict for the next 5 business days for NVDA and NVDQ
+        nvda_predictions = predictor.predict_next_days(nvda_data, predictor.nvda_model, num_days=5)
+        nvdq_predictions = predictor.predict_next_days(nvdq_data, predictor.nvdq_model, num_days=5)
+
+        # Combine NVDA and NVDQ predictions day by day
+        combined_predictions = []
+        for i in range(5):
+            combined_predictions.append({
+                'date': nvda_predictions[i]['date'],
+                'nvda': {
+                    'open_price': f"${nvda_predictions[i]['open_price']:,.2f}",
+                    'highest_price': f"${nvda_predictions[i]['highest_price']:,.2f}",
+                    'lowest_price': f"${nvda_predictions[i]['lowest_price']:,.2f}",
+                    'close_price': f"${nvda_predictions[i]['close_price']:,.2f}",
+                },
+                'nvdq': {
+                    'open_price': f"${nvdq_predictions[i]['open_price']:,.2f}",
+                    'highest_price': f"${nvdq_predictions[i]['highest_price']:,.2f}",
+                    'lowest_price': f"${nvdq_predictions[i]['lowest_price']:,.2f}",
+                    'close_price': f"${nvdq_predictions[i]['close_price']:,.2f}",
+                }
+            })
+
+        # Generate trading strategies for each day
         nvda_shares = INITIAL_NVDA_SHARES
         nvdq_shares = INITIAL_NVDQ_SHARES
-
-        # Generate strategies for each day
         strategies = []
-        for day_prediction in predictions:
+        for prediction in combined_predictions:
             best_strategy, portfolio_value, nvda_shares, nvdq_shares = determine_best_strategy(
-                day_prediction, nvda_shares, nvdq_shares
+                prediction, nvda_shares, nvdq_shares
             )
 
             strategies.append({
-                'date': day_prediction['date'],
+                'date': prediction['date'],
                 'action': best_strategy,
                 'portfolio_value': f"${portfolio_value:,.2f}"
             })
 
-        # Prepare predictions for NVDA
-        nvda_predictions = predictions[0]['nvda']
-        nvdq_predictions = predictions[0]['nvdq']
-        print(nvda_predictions)
+        # Return the combined predictions and strategies
         return jsonify({
             'success': True,
             'predictions': {
-                'highest_price': f"${nvda_predictions['highest_price']:,.2f}",
-                'lowest_price': f"${nvda_predictions['lowest_price']:,.2f}",
-                'average_price': f"${nvda_predictions['close_price']:,.2f}"
+                'highest_price': f"${nvda_predictions[0]['highest_price']:,.2f}",
+                'lowest_price': f"${nvda_predictions[0]['lowest_price']:,.2f}",
+                'average_price': f"${nvda_predictions[0]['close_price']:,.2f}"
             },
             'strategies': strategies
         })
@@ -118,7 +149,6 @@ def predict():
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)})
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=True)
