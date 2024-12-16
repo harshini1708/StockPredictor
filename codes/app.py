@@ -7,7 +7,7 @@ import os
 app = Flask(__name__)
 
 # Initialize StockPredictor and load models
-predictor = StockPredictor(data_path='/Users/harshinireddy/Desktop/ML_stockanalysis/data')
+predictor = StockPredictor(data_path='/Users/amarenderreddy/Desktop/Fall-24/CMPE-257/StockPredictor')
 predictor.load_data()
 predictor.load_saved_model()  # Load NVDA and NVDQ models
 
@@ -40,10 +40,18 @@ def determine_best_strategy(day_predictions, nvda_shares, nvdq_shares):
     """
     Determine the best trading strategy (IDLE, BULLISH, BEARISH) for a single day.
     """
+    print("Day Predictions:", day_predictions)  # Debugging line
     nvda_open = day_predictions['nvda']['open_price']
     nvda_close = day_predictions['nvda']['close_price']
     nvdq_open = day_predictions['nvdq']['open_price']
     nvdq_close = day_predictions['nvdq']['close_price']
+
+    # Debug prints
+    print("NVDA Open:", nvda_open, "NVDA Close:", nvda_close)
+    print("NVDQ Open:", nvdq_open, "NVDQ Close:", nvdq_close)
+
+    if None in [nvda_open, nvda_close, nvdq_open, nvdq_close]:
+        raise ValueError("One of the prices is None. Check prediction outputs.")
 
     # Calculate portfolio values for each strategy
     idle_value, _, _ = calculate_portfolio_value("IDLE", nvda_open, nvda_close, nvdq_open, nvdq_close, nvda_shares, nvdq_shares)
@@ -94,13 +102,14 @@ def predict():
 
         # Prepare predictions for NVDA
         nvda_predictions = predictions[0]['nvda']
-
+        nvdq_predictions = predictions[0]['nvdq']
+        print(nvda_predictions)
         return jsonify({
             'success': True,
             'predictions': {
-                'highest_price': f"${nvda_predictions['highest_price']:.2f}",
-                'lowest_price': f"${nvda_predictions['lowest_price']:.2f}",
-                'average_price': f"${nvda_predictions['average_price']:.2f}"
+                'highest_price': f"${nvda_predictions['highest_price']:,.2f}",
+                'lowest_price': f"${nvda_predictions['lowest_price']:,.2f}",
+                'average_price': f"${nvda_predictions['close_price']:,.2f}"
             },
             'strategies': strategies
         })

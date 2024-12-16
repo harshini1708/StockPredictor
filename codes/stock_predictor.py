@@ -3,13 +3,16 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, LSTM, Dense, Dropout, BatchNormalization
-from tensorflow.keras.optimizers.legacy import Adam  # Use legacy optimizer for M1/M2 Macs
+from tensorflow.keras.optimizers import Adam
+# from tensorflow.keras.optimizers.legacy import Adam  # Use legacy optimizer for M1/M2 Macs
+from tensorflow.keras.losses import MeanSquaredError
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau  # Add ReduceLROnPlateau import
 from sklearn.preprocessing import MinMaxScaler
 import os
+import pickle
 
 class StockPredictor:
-    def __init__(self, data_path='/Users/harshinireddy/Desktop/ML_stockanalysis/data'):
+    def __init__(self, data_path='/Users/amarenderreddy/Desktop/Fall-24/CMPE-257/StockPredictor'):
         self.data_path = data_path
         self.lookback_period = 20
         self.nvda_scaler = MinMaxScaler()
@@ -20,8 +23,8 @@ class StockPredictor:
         """Load and preprocess stock data"""
         try:
             # Load data
-            self.nvda_data = pd.read_csv(os.path.join(self.data_path, 'NVDA.csv'))
-            self.nvdq_data = pd.read_csv(os.path.join(self.data_path, 'NVDQ.csv'))
+            self.nvda_data = pd.read_csv(os.path.join(self.data_path, 'data', 'NVDA1Year.csv'))
+            self.nvdq_data = pd.read_csv(os.path.join(self.data_path, 'data', 'NVDQ1Year.csv'))
 
             print("\nInitial data types:")
             print("NVDA:\n", self.nvda_data.dtypes)
@@ -95,40 +98,46 @@ class StockPredictor:
             df['Up_Trend'] = (df['Close/Last'] > df['MA_20']).astype(float)
             df['Price_Momentum'] = df['Close/Last'].diff(5)
 
-            # Normalize prices by last close
-            last_close = df['Close/Last'].iloc[-1]
-            df['High'] = df['High'] / last_close
-            df['Low'] = df['Low'] / last_close
-            df['Close/Last'] = df['Close/Last'] / last_close
-            df['Open'] = df['Open'] / last_close
+            # # Normalize prices by last close
+            # last_close = df['Close/Last'].iloc[-1]
+            # df['High'] = df['High'] / last_close
+            # df['Low'] = df['Low'] / last_close
+            # df['Close/Last'] = df['Close/Last'] / last_close
+            # df['Open'] = df['Open'] / last_close
 
-            # Drop NaN values
-            df = df.dropna()
+            # Drop NaN values and exclude non-numeric columns
+            df = df.dropna().select_dtypes(include=[np.number])
 
             return df
 
         except Exception as e:
             print(f"Error in prepare_features: {e}")
             raise
+
     def create_sequences(self, data, scaler):
-        """Create sequences for LSTM"""
+        """Create sequences for LSTM using all features."""
         try:
             # Prepare features
             features = self.prepare_features(data)
+           
+            # Drop non-numeric columns like 'Date'
+            features = features.select_dtypes(include=[np.number])
+
+            # Normalize features
+            scaled_features = scaler.fit_transform(features)
 
             # Create sequences
             X, y = [], []
-            for i in range(len(features) - self.lookback_period - 5):
-                # Input sequence
-                seq = features[['Close/Last', 'High', 'Low']].iloc[i:(i + self.lookback_period)].values
+            for i in range(len(scaled_features) - self.lookback_period - 5):
+                seq = scaled_features[i:(i + self.lookback_period)]
                 X.append(seq)
 
-                # Target: next 5 days
                 future = features.iloc[i + self.lookback_period:i + self.lookback_period + 5]
                 y.append([
-                    future['High'].max(),
-                    future['Low'].min(),
-                    future['Close/Last'].mean()
+                    future['Open'].mean(),   # Open price
+                    future['High'].max(),    # High price
+                    future['Low'].min(),     # Low price
+                    future['Close/Last'].mean()  # Average close price
                 ])
 
             return np.array(X), np.array(y)
@@ -136,8 +145,9 @@ class StockPredictor:
         except Exception as e:
             print(f"Error in create_sequences: {e}")
             raise
-    def build_model(self, input_shape, is_inverse_etf=False):
-        """Build LSTM model with relative price prediction"""
+
+    def build_model(self, input_shape):
+        """Build LSTM model with dynamic input shape"""
         inputs = Input(shape=input_shape)
 
         x = LSTM(64, return_sequences=True)(inputs)
@@ -151,23 +161,91 @@ class StockPredictor:
         x = LSTM(16)(x)
         x = BatchNormalization()(x)
 
-        # Output layer predicts relative price changes
-        outputs = Dense(3, activation='sigmoid')(x)
+        # Output layer predicts open, high, low, and close prices
+        outputs = Dense(4, activation='linear')(x)  # Predict Open, High, Low, Close
 
         model = Model(inputs=inputs, outputs=outputs)
+
         model.compile(
             optimizer=Adam(learning_rate=0.001),
-            loss='huber',
+            loss=MeanSquaredError(),  # Explicitly use the loss function
             metrics=['mae']
         )
         return model
+
+    def predict_next_period(self, target_date=None):
+        """Predict prices for the next 5 business days."""
+        try:
+            if self.model_nvda is None or self.model_nvdq is None:
+                raise ValueError("Models are not loaded. Call load_saved_model() first.")
+
+            if target_date is None:
+                target_date = pd.Timestamp.today().strftime('%Y-%m-%d')
+            target_date = pd.to_datetime(target_date)
+            print(f"\nPredicting starting from: {target_date}")
+
+            # Filter historical data up to the target date
+            nvda_filtered = self.nvda_data[self.nvda_data['Date'] <= target_date]
+            nvdq_filtered = self.nvdq_data[self.nvdq_data['Date'] <= target_date]
+
+            # Normalize data and create sequences
+            nvda_features = self.prepare_features(nvda_filtered)
+            nvdq_features = self.prepare_features(nvdq_filtered)
+
+            last_nvda_seq = nvda_features.values[-self.lookback_period:]
+            last_nvdq_seq = nvdq_features.values[-self.lookback_period:]
+
+            # Reshape for LSTM
+            last_nvda_seq = np.expand_dims(last_nvda_seq, axis=0)
+            last_nvdq_seq = np.expand_dims(last_nvdq_seq, axis=0)
+
+            # Iteratively predict next 5 days
+            daily_predictions = []
+            for i in range(5):
+                # Predict for NVDA and NVDQ
+                nvda_prediction = self.model_nvda.predict(last_nvda_seq)[0]
+                nvdq_prediction = self.model_nvdq.predict(last_nvdq_seq)[0]
+
+                # Append predictions
+                daily_predictions.append({
+                    'date': (target_date + pd.Timedelta(days=i + 1)).strftime('%Y-%m-%d'),
+                    'nvda': {
+                        'open_price': nvda_prediction[0],  # Open price
+                        'highest_price': nvda_prediction[1],
+                        'lowest_price': nvda_prediction[2],
+                        'close_price': nvda_prediction[3]
+                    },
+                    'nvdq': {
+                        'open_price': nvdq_prediction[0],
+                        'highest_price': nvdq_prediction[1],
+                        'lowest_price': nvdq_prediction[2],
+                        'close_price': nvdq_prediction[3]
+                    }
+                })
+
+                # Prepare a new row with 22 features: Use predicted values for open/high/low/close
+                new_nvda_row = np.zeros((1, 22))  # Placeholder for 22 features
+                new_nvda_row[0, 0:4] = nvda_prediction  # Replace first 4 columns with predicted values
+
+                new_nvdq_row = np.zeros((1, 22))  # Placeholder for 22 features
+                new_nvdq_row[0, 0:4] = nvdq_prediction
+
+                # Update the input sequences
+                last_nvda_seq = np.append(last_nvda_seq[:, 1:, :], new_nvda_row.reshape(1, 1, -1), axis=1)
+                last_nvdq_seq = np.append(last_nvdq_seq[:, 1:, :], new_nvdq_row.reshape(1, 1, -1), axis=1)
+
+            return daily_predictions
+
+        except Exception as e:
+            print(f"Error in prediction: {e}")
+            raise
 
     def train(self):
         """Train models"""
         try:
             print("Training NVDA model...")
             X_nvda, y_nvda = self.create_sequences(self.nvda_data, self.nvda_scaler)
-            self.model_nvda = self.build_model((self.lookback_period, 3), is_inverse_etf=False)
+            self.model_nvda = self.build_model((self.lookback_period, X_nvda.shape[2]))
 
             self.model_nvda.fit(
                 X_nvda, y_nvda,
@@ -183,7 +261,7 @@ class StockPredictor:
 
             print("\nTraining NVDQ model...")
             X_nvdq, y_nvdq = self.create_sequences(self.nvdq_data, self.nvdq_scaler)
-            self.model_nvdq = self.build_model((self.lookback_period, 3), is_inverse_etf=True)
+            self.model_nvdq = self.build_model((self.lookback_period, X_nvdq.shape[2]))
 
             self.model_nvdq.fit(
                 X_nvdq, y_nvdq,
@@ -208,20 +286,37 @@ class StockPredictor:
             raise
 
     def save_model(self):
-        """Save both NVDA and NVDQ models."""
+        """Save both NVDA and NVDQ models and their scalers."""
+        model_dir = os.path.join(self.data_path, 'model')
+        os.makedirs(model_dir, exist_ok=True)  # Ensure the directory exists
+
         if self.model_nvda:
-            self.model_nvda.save(os.path.join(self.data_path, 'model_nvda.h5'))
+            self.model_nvda.save(os.path.join(model_dir, 'model_nvda.h5'))
             print("NVDA model saved successfully.")
+
+            # Save NVDA scaler
+            with open(os.path.join(model_dir, 'scaler_nvda.pkl'), 'wb') as f:
+                pickle.dump(self.nvda_scaler, f)
+            print("NVDA scaler saved successfully.")
+
         if self.model_nvdq:
-            self.model_nvdq.save(os.path.join(self.data_path, 'model_nvdq.h5'))
+            self.model_nvdq.save(os.path.join(model_dir, 'model_nvdq.h5'))
             print("NVDQ model saved successfully.")
 
-    def load_saved_model(self):
-        """Load both NVDA and NVDQ models."""
-        from tensorflow.keras.models import load_model
+            # Save NVDQ scaler
+            with open(os.path.join(model_dir, 'scaler_nvdq.pkl'), 'wb') as f:
+                pickle.dump(self.nvdq_scaler, f)
+            print("NVDQ scaler saved successfully.")        
 
-        nvda_model_path = os.path.join(self.data_path, 'model_nvda.h5')
-        nvdq_model_path = os.path.join(self.data_path, 'model_nvdq.h5')
+    def load_saved_model(self):
+        """Load both NVDA and NVDQ models and their scalers."""
+        from tensorflow.keras.models import load_model
+        model_dir = os.path.join(self.data_path, 'model')
+
+        nvda_model_path = os.path.join(model_dir, 'model_nvda.h5')
+        nvdq_model_path = os.path.join(model_dir, 'model_nvdq.h5')
+        nvda_scaler_path = os.path.join(model_dir, 'scaler_nvda.pkl')
+        nvdq_scaler_path = os.path.join(model_dir, 'scaler_nvdq.pkl')
 
         if os.path.exists(nvda_model_path):
             self.model_nvda = load_model(nvda_model_path)
@@ -235,64 +330,23 @@ class StockPredictor:
         else:
             print("Warning: NVDQ model file not found.")
 
+        # Load NVDA scaler
+        if os.path.exists(nvda_scaler_path):
+            with open(nvda_scaler_path, 'rb') as f:
+                self.nvda_scaler = pickle.load(f)
+            print("NVDA scaler loaded successfully.")
+        else:
+            print("Warning: NVDA scaler file not found.")
+
+        # Load NVDQ scaler
+        if os.path.exists(nvdq_scaler_path):
+            with open(nvdq_scaler_path, 'rb') as f:
+                self.nvdq_scaler = pickle.load(f)
+            print("NVDQ scaler loaded successfully.")
+        else:
+            print("Warning: NVDQ scaler file not found.")
+
     import numpy as np
-
-    def predict_next_period(self, target_date=None):
-        """Predict prices for the next 5 business days using LSTM models."""
-        try:
-            if self.model_nvda is None or self.model_nvdq is None:
-                raise ValueError("Models are not loaded. Call load_saved_model() first.")
-
-            if target_date is None:
-                target_date = pd.Timestamp.today().strftime('%Y-%m-%d')
-            target_date = pd.to_datetime(target_date)
-            print(f"\nPredicting starting from: {target_date}")
-
-            # Filter historical data up to the target date
-            nvda_filtered = self.nvda_data[self.nvda_data['Date'] <= target_date]
-            nvdq_filtered = self.nvdq_data[self.nvdq_data['Date'] <= target_date]
-
-            # Normalize data and create sequences
-            nvda_features = self.prepare_features(nvda_filtered)
-            nvdq_features = self.prepare_features(nvdq_filtered)
-
-            last_nvda_seq = nvda_features[['Close/Last', 'High', 'Low']].values[-self.lookback_period:]
-            last_nvdq_seq = nvdq_features[['Close/Last', 'High', 'Low']].values[-self.lookback_period:]
-
-            # Reshape for LSTM model
-            last_nvda_seq = np.expand_dims(last_nvda_seq, axis=0)
-            last_nvdq_seq = np.expand_dims(last_nvdq_seq, axis=0)
-
-            # Predict next 5 days
-            nvda_predictions = self.model_nvda.predict(last_nvda_seq)[0]
-            nvdq_predictions = self.model_nvdq.predict(last_nvdq_seq)[0]
-
-            daily_predictions = []
-            for i in range(5):
-                daily_predictions.append({
-                    'date': (target_date + pd.Timedelta(days=i + 1)).strftime('%Y-%m-%d'),
-                    'nvda': {
-                        'open_price': None,  # Open price not predicted by LSTM
-                        'close_price': nvda_predictions[2],  # Average close price
-                        'highest_price': nvda_predictions[0],
-                        'lowest_price': nvda_predictions[1],
-                        'average_price': nvda_predictions[2]
-                    },
-                    'nvdq': {
-                        'open_price': None,
-                        'close_price': nvdq_predictions[2],
-                        'highest_price': nvdq_predictions[0],
-                        'lowest_price': nvdq_predictions[1],
-                        'average_price': nvdq_predictions[2]
-                    }
-                })
-
-            return daily_predictions
-
-        except Exception as e:
-            print(f"Error in prediction: {e}")
-            raise
-
 
 if __name__ == "__main__":
     predictor = StockPredictor()
