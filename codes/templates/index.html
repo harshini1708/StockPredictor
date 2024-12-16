@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SmartTrader Console</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            border: 2px solid black;
+            padding: 20px;
+        }
+        table {
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            border: 1px solid black;
+            padding: 8px;
+            text-align: left;
+        }
+        .predictions {
+            margin-top: 20px;
+        }
+        .strategy {
+            margin-top: 20px;
+        }
+        h1, h2 {
+            font-weight: bold;
+        }
+        input[type="date"] {
+            margin-right: 10px;
+        }
+        button {
+            padding: 5px 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SmartTrader Console</h1>
+
+        <div>
+            <span>Assume today's date is: </span>
+            <input type="date" id="selected-date">
+            <button onclick="makePrediction()">Predict</button>
+        </div>
+
+        <div id="results" style="display: none;">
+            <p id="selected-date-display"></p>
+
+            <h2>Predicted prices for the next five business days (in USD) are:</h2>
+            <table id="price-predictions">
+                <tr>
+                    <td>Highest Price</td>
+                    <td id="highest-price"></td>
+                </tr>
+                <tr>
+                    <td>Lowest Price</td>
+                    <td id="lowest-price"></td>
+                </tr>
+                <tr>
+                    <td>Average Closing Price</td>
+                    <td id="average-price"></td>
+                </tr>
+            </table>
+
+            <h2>Recommended trading strategy:</h2>
+            <table id="strategy-table">
+                <tr>
+                    <th>Date</th>
+                    <th>Action</th>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        function makePrediction() {
+            const date = document.getElementById('selected-date').value;
+            if (!date) {
+                alert('Please select a date');
+                return;
+            }
+
+            // Show loading state
+            document.getElementById('results').style.display = 'none';
+
+            // Make prediction request
+            fetch('/predict', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `date=${date}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update predictions
+                    document.getElementById('highest-price').textContent = data.predictions.highest_price;
+                    document.getElementById('lowest-price').textContent = data.predictions.lowest_price;
+                    document.getElementById('average-price').textContent = data.predictions.average_price;
+
+                    // Update strategy table
+                    const strategyTable = document.getElementById('strategy-table');
+                    // Clear existing rows except header
+                    while (strategyTable.rows.length > 1) {
+                        strategyTable.deleteRow(1);
+                    }
+                    // Add new rows
+                    data.strategies.forEach(strategy => {
+                        const row = strategyTable.insertRow();
+                        row.insertCell().textContent = strategy.date;
+                        row.insertCell().textContent = strategy.action;
+                    });
+
+                    // Show results
+                    document.getElementById('selected-date-display').textContent =
+                        `You have selected today as ${date}. SmartTrader has made the following predictions.`;
+                    document.getElementById('results').style.display = 'block';
+                } else {
+                    alert('Error making prediction: ' + data.error);
+                }
+            })
+            .catch(error => {
+                alert('Error making prediction: ' + error);
+            });
+        }
+
+        // Set today's date as default
+        document.getElementById('selected-date').valueAsDate = new Date();
+    </script>
+</body>
+</html>
