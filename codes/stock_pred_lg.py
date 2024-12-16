@@ -7,8 +7,13 @@ from sklearn.model_selection import train_test_split
 import pickle
 
 class StockPredictor:
-    def __init__(self, data_path='/Users/amarenderreddy/Desktop/Fall-24/CMPE-257/StockPredictor'):
-        self.data_path = data_path
+    def __init__(self, data_path=None):
+        # Determine the project base directory
+        self.data_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # One level up from current script
+        
+        # # Use the provided data_path or set it to the 'data' directory within the project
+        # self.data_path = base_dir
+            
         self.lookback_period = 20
         self.nvda_model = None
         self.nvdq_model = None

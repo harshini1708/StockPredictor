@@ -12,7 +12,16 @@ import os
 import pickle
 
 class StockPredictor:
-    def __init__(self, data_path='/Users/amarenderreddy/Desktop/Fall-24/CMPE-257/StockPredictor'):
+    def __init__(self, data_path=None):
+        # Determine the project base directory
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Set data_path relative to the project directory
+        if data_path is None:
+            self.data_path = os.path.join(base_dir, 'data')
+        else:
+            self.data_path = data_path
+
         self.data_path = data_path
         self.lookback_period = 20
         self.nvda_scaler = MinMaxScaler()

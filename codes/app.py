@@ -8,7 +8,7 @@ import os
 app = Flask(__name__)
 
 # Initialize StockPredictor and load models
-predictor = StockPredictor(data_path='/Users/amarenderreddy/Desktop/Fall-24/CMPE-257/StockPredictor')
+predictor = StockPredictor(data_path=None)
 predictor.load_data()
 predictor.load_models()  # Load NVDA and NVDQ models
 
