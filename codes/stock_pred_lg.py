@@ -176,28 +176,31 @@ class StockPredictor:
             raise
 
     def predict_next_days(self, data, model,start_date, num_days=5):
-        """Predict the next 'num_days' prices sequentially."""
-        # Filter data up to the given start_date
+        """Predict the next 'num_days' prices sequentially starting from the next day after 'start_date'."""
         if isinstance(start_date, str):
             start_date = pd.to_datetime(start_date)
-            
-        data['Date'] = pd.to_datetime(data['Date'])
-        filtered_data = data[data['Date'] <= pd.to_datetime(start_date)].copy()
 
-        if filtered_data.empty:
-            raise ValueError("No data available for the given start_date or before it.")
+        data['Date'] = pd.to_datetime(data['Date'])
+        highest_date_in_data = data['Date'].max()
+
+        # Check if the given start_date is greater than the highest date in the dataset
+        if start_date > highest_date_in_data:
+            current_date = highest_date_in_data + pd.Timedelta(days=1)  # Start predicting from the next day of highest date
+            total_days_to_predict = (start_date - highest_date_in_data).days + num_days  # Extra days + 5 days
+        else:
+            current_date = start_date + pd.Timedelta(days=1)  # Start predicting from the next day after start_date
+            total_days_to_predict = num_days
 
         predictions = []
-        current_date = start_date + pd.Timedelta(days=1)
-        current_data = filtered_data.copy()
+        current_data = data.copy()
 
-        for i in range(num_days):
+        for i in range(total_days_to_predict):
             # Predict for the next day
             next_prediction = self.predict_next_day(current_data, model)
-            
+
             # Extract predicted values
             open_price, high_price, low_price, close_price = next_prediction[0]
-            
+
             # Append the prediction
             predictions.append({
                 'date': current_date.strftime('%Y-%m-%d'),
@@ -206,10 +209,10 @@ class StockPredictor:
                 'lowest_price': low_price,
                 'close_price': close_price
             })
-            
+
             # Add the prediction to the data for the next step
             new_row = {
-                'Date': current_date.strftime('%Y-%m-%d'),
+                'Date': current_date,
                 'Open': open_price,
                 'High': high_price,
                 'Low': low_price,
@@ -219,7 +222,10 @@ class StockPredictor:
             current_data = pd.concat([current_data, pd.DataFrame([new_row])], ignore_index=True)
             current_date += pd.Timedelta(days=1)
         
-        return predictions
+        # Filter only the predictions corresponding to [start_date + 1 to start_date + 5]
+        final_predictions = [pred for pred in predictions if start_date < pd.to_datetime(pred['date']) <= (start_date + pd.Timedelta(days=num_days))]
+    
+        return final_predictions
 
 
 if __name__ == "__main__":

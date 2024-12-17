@@ -91,8 +91,6 @@ def predict():
 
         # Convert selected date to datetime
         target_date = pd.to_datetime(selected_date)
-        print("asdadasd;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;")
-        print(target_date)
 
         # Filter data up to the selected date
         nvda_data = predictor.nvda_data[predictor.nvda_data['Date'] <= target_date]
