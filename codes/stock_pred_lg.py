@@ -175,10 +175,21 @@ class StockPredictor:
             print(f"Error in prediction: {e}")
             raise
 
-    def predict_next_days(self, data, model, num_days=5):
+    def predict_next_days(self, data, model,start_date, num_days=5):
         """Predict the next 'num_days' prices sequentially."""
+        # Filter data up to the given start_date
+        if isinstance(start_date, str):
+            start_date = pd.to_datetime(start_date)
+            
+        data['Date'] = pd.to_datetime(data['Date'])
+        filtered_data = data[data['Date'] <= pd.to_datetime(start_date)].copy()
+
+        if filtered_data.empty:
+            raise ValueError("No data available for the given start_date or before it.")
+
         predictions = []
-        current_data = data.copy()  # Use a copy of the data to maintain the original state
+        current_date = start_date + pd.Timedelta(days=1)
+        current_data = filtered_data.copy()
 
         for i in range(num_days):
             # Predict for the next day
@@ -189,7 +200,7 @@ class StockPredictor:
             
             # Append the prediction
             predictions.append({
-                'date': (current_data['Date'].iloc[-1] + pd.Timedelta(days=1)).strftime('%Y-%m-%d'),
+                'date': current_date.strftime('%Y-%m-%d'),
                 'open_price': open_price,
                 'highest_price': high_price,
                 'lowest_price': low_price,
@@ -198,7 +209,7 @@ class StockPredictor:
             
             # Add the prediction to the data for the next step
             new_row = {
-                'Date': current_data['Date'].iloc[-1] + pd.Timedelta(days=1),
+                'Date': current_date.strftime('%Y-%m-%d'),
                 'Open': open_price,
                 'High': high_price,
                 'Low': low_price,
@@ -206,6 +217,7 @@ class StockPredictor:
                 'Volume': 0  # Placeholder for volume
             }
             current_data = pd.concat([current_data, pd.DataFrame([new_row])], ignore_index=True)
+            current_date += pd.Timedelta(days=1)
         
         return predictions
 
@@ -216,10 +228,13 @@ if __name__ == "__main__":
     if predictor.load_data():
         predictor.train_model()
 
+        # Input start date from the user
+        start_date = input("Enter the start date (YYYY-MM-DD): ")
         # Example prediction for NVDA
-        nvda_prediction = predictor.predict_next_days(predictor.nvda_data, predictor.nvda_model,5)
+       
+        nvda_prediction = predictor.predict_next_days(predictor.nvda_data, predictor.nvda_model,start_date, 5)
         print("NVDA Prediction (Next Day):", nvda_prediction)
 
         # Example prediction for NVDQ
-        nvdq_prediction = predictor.predict_next_days(predictor.nvdq_data, predictor.nvdq_model,5)
+        nvdq_prediction = predictor.predict_next_days(predictor.nvdq_data, predictor.nvdq_model,start_date, 5)
         print("NVDQ Prediction (Next Day):", nvdq_prediction)
